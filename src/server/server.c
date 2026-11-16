@@ -87,7 +87,6 @@ int send_all(int sock, const char *msg, size_t len) {
 }
 
 void broadcast(struct pollfd *fds, const char *msg, size_t len, int sock_from) {
-  sleep(2);
   for (uint8_t i = 1; i < MAX_FDS; i++) {
     if (fds[i].fd >= 0 && fds[i].fd != sock_from) {
       if (send_all(fds[i].fd, msg, len) < 0) {

@@ -7,8 +7,8 @@ BUILD_DIR = build
 SRC_DIR = src
 
 # Shared modules
-# COMMON_SRC = $(wildcard $(SRC_DIR)/common/*.c)
-# COMMON_OBJ = $(patsubst $(SRC_DIR)/common/%.c,$(BUILD_DIR)/common/%.o,$(COMMON_SRC))
+COMMON_SRC = $(wildcard $(SRC_DIR)/common/*.c)
+COMMON_OBJ = $(patsubst $(SRC_DIR)/common/%.c,$(BUILD_DIR)/common/%.o,$(COMMON_SRC))
 
 # Server modules
 SERVER_SRC = $(wildcard $(SRC_DIR)/server/*.c)
@@ -35,9 +35,9 @@ $(CLIENT): $(CLIENT_OBJ) # $(COMMON_OBJ)
 	$(CC) $^ -o $@
 
 # Compile source files
-# $(BUILD_DIR)/common/%.o: $(SRC_DIR)/common/%.c
-	# @mkdir -p $(@D)
-	# $(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+$(BUILD_DIR)/common/%.o: $(SRC_DIR)/common/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/server/%.o: $(SRC_DIR)/server/%.c
 	@mkdir -p $(@D)
