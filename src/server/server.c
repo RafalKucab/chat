@@ -115,28 +115,15 @@ void process_conn(int server_sock, struct pollfd *fds, u_int8_t *fds_count) {
   }
 }
 
-int main(int argc, char **argv) {
-  uint16_t port = 8012;
-
-  if (argc < 2) {
-    usage();
-    return 1;
-  }
-  // TODO: argument parsing needs to be fixed
-  if (strcmp("-p", argv[1]) == 0 || strcmp("--port", argv[1]) == 0) {
-    port = atoi(argv[2]);
-  }
-  printf("Starting server on port %d...\n", port);
-
+int create_sock(uint16_t port) {
   // create a socket
-  int sock = socket(AF_INET, SOCK_STREAM, 0);
-  if (sock < 0) {
+  int sock = -1;
+  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     perror("Socket creation failed");
     return 1;
   }
 
   struct sockaddr_in serv_addr;
-
   bzero(&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_port = htons(port);
@@ -146,8 +133,7 @@ int main(int argc, char **argv) {
   setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 
   // bind socket
-  int bnd = bind(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
-  if (bnd < 0) {
+  if (bind(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
     perror("Bind socket failed");
     return 2;
   }
@@ -159,7 +145,22 @@ int main(int argc, char **argv) {
     return 3;
   }
 
-  char *buffer = "DATA\0";
+  return sock;
+}
+
+int main(int argc, char **argv) {
+  uint16_t port = 8012;
+
+  if (strcmp("-p", argv[1]) == 0 || strcmp("--port", argv[1]) == 0) {
+    port = atoi(argv[2]);
+  }
+  printf("Starting server on port %d...\n", port);
+
+  int sock_serv = -1;
+  if ((sock_serv = create_sock(port)) < 0) {
+    perror("Socket creation failed");
+    return sock_serv;
+  }
 
   struct pollfd fds_arr[MAX_CLIENT];
   for (uint8_t i = 0; i < MAX_CLIENT; i++) {
@@ -168,7 +169,7 @@ int main(int argc, char **argv) {
     fds_arr[i].revents = 0;
   }
 
-  fds_arr[0].fd = sock;
+  fds_arr[0].fd = sock_serv;
   fds_arr[0].events = POLLIN;
   fds_arr[0].revents = 0;
   uint8_t fds_count = 1; // server fd
@@ -180,15 +181,12 @@ int main(int argc, char **argv) {
       break;
     }
 
-    process_conn(sock, fds_arr, &fds_count);
+    process_conn(sock_serv, fds_arr, &fds_count);
   }
 
-  // send(sock_client, buffer, strlen(buffer), 0);
+  // close server socket
+  close(sock_serv);
 
   fprintf(stdout, "Shuting down the server");
-
-  // close server socket
-  close(sock);
-
   return 0;
 }
