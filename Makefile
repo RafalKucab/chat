@@ -41,7 +41,7 @@ tests: $(TESTS)
 $(SERVER): $(SERVER_OBJ) # $(COMMON_OBJ)
 	$(CC) $^ -o $@
 
-$(CLIENT): $(CLIENT_OBJ) # $(COMMON_OBJ)
+$(CLIENT): $(CLIENT_OBJ) $(COMMON_OBJ)
 	$(CC) $^ -o $@
 
 $(TESTS): $(TEST_OBJ) $(COMMON_OBJ) $(MUNIT_OBJ)

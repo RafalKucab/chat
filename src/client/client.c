@@ -1,3 +1,4 @@
+#include <_strings.h>
 #include <_time.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -15,16 +16,14 @@
 #include <unistd.h>
 
 #include "../common/common.h"
+#include "../common/list.h"
 #include "frame.h"
-
-#define MAX_LINES 80
-
-char *lines[MAX_LINES] = {0};
 
 typedef struct worker_params {
   char name[64];
   char addr[128];
   int sock;
+  chat_list_t *chat_history;
 } worker_params_t;
 
 void usage(void) { fprintf(stderr, "usage: client [server_addr] [name]\n"); }
@@ -59,36 +58,11 @@ int open_conn(char *addr, unsigned int port) {
   return sock;
 }
 
-// append a copy of new_line (len bytes, not NUL-terminated) to the history;
-// when the history is full the oldest line is dropped
-void append_line(char **lines, size_t lines_num, const char *new_line,
-                 size_t len, uint8_t *line_count) {
-  // strip trailing newline(s)
-  while (len > 0 && (new_line[len - 1] == '\n' || new_line[len - 1] == '\r')) {
-    len--;
-  }
-
-  char *copy = malloc(len + 1);
-  if (copy == NULL) {
-    return;
-  }
-  memcpy(copy, new_line, len);
-  copy[len] = '\0';
-
-  if (*line_count == lines_num) { // full: drop oldest, shift the rest up
-    free(lines[0]);
-    memmove(&lines[0], &lines[1], (lines_num - 1) * sizeof(char *));
-    (*line_count)--;
-  }
-  lines[(*line_count)++] = copy;
-}
-
 void *poll_worker(void *args) {
   worker_params_t worker_params = *(worker_params_t *)args;
   struct pollfd fds[2];
   char input[1024] = {0};
   char incomming[1024] = {0};
-  uint8_t line_count = 0;
   char title[128];
 
   snprintf(title, sizeof(title), "Connected to %s", worker_params.addr);
@@ -101,8 +75,7 @@ void *poll_worker(void *args) {
   fds[1].events = POLLIN;
   fds[1].revents = 0;
 
-  render(title, worker_params.name, (const char **)lines, line_count, input,
-         strlen(input) - 2);
+  render(title, worker_params.chat_history, input, strlen(input));
   for (;;) {
     if (poll(fds, 2, -1) < 0) {
       fprintf(stdout, "poll quiting");
@@ -115,24 +88,23 @@ void *poll_worker(void *args) {
       }
       input[n] = '\0';
       msg_t msg;
-      strncpy(msg.user, worker_params.name, strlen(worker_params.name));
-      strncpy(msg.message, input, strlen(input));
+      strcpy(msg.user, worker_params.name);
+      strcpy(msg.message, input);
       send(worker_params.sock, &msg, sizeof(msg_t), 0);
-      append_line(lines, MAX_LINES, input, (size_t)n, &line_count);
-      render(title, worker_params.name, (const char **)lines, line_count, input,
-             strlen(input) - 2);
+      arr_push(worker_params.chat_history, &msg);
+      render(title, worker_params.chat_history, input, strlen(input));
     }
     if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
+      bzero(&incomming, 1024);
       ssize_t n = recv(fds[1].fd, incomming, sizeof(incomming) - 1, 0);
       if (n <= 0) { // server closed the connection or error
         break;
       }
-      incomming[n] = '\0';
+      // incomming[n] = '\0';
       msg_t *msg = (msg_t *)&incomming;
 
-      append_line(lines, MAX_LINES, msg->message, (size_t)n, &line_count);
-      render(title, msg->user, (const char **)lines, line_count, input,
-             strlen(input) - 2);
+      arr_push(worker_params.chat_history, msg);
+      render(title, worker_params.chat_history, input, strlen(input));
     }
   }
 
@@ -147,15 +119,19 @@ int main(int argc, char **argv) {
   char *addr = argv[1];
   char *name = argv[2];
 
+  chat_list_t *chat_history = arr_init(100);
+
   const int PORT = 8011;
 
   int sock = open_conn(addr, PORT);
 
   pthread_t poll_th;
   worker_params_t worker_params;
+  bzero(&worker_params, sizeof(worker_params));
   strncpy(worker_params.addr, addr, strlen(addr));
   strncpy(worker_params.name, name, strlen(name));
   worker_params.sock = sock;
+  worker_params.chat_history = chat_history;
 
   if (pthread_create(&poll_th, NULL, poll_worker, &worker_params) != 0) {
     perror("Thread creation failed");

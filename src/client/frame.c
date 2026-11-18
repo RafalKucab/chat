@@ -105,15 +105,15 @@ typedef struct {
  *
  * title:   printable ASCII; cut to fit the top border.
  *
- * name:    user name; every chat line is shown as " name > message".
- * lines:   chat history, oldest first; newest lines sit at the bottom and
- *          long lines wrap. Expected to be printable ASCII without '\n'.
+ * history: chat messages, oldest first; each is shown as " user > message".
+ *          Newest messages sit at the bottom and long ones wrap. Trailing
+ *          '\n'/'\r' are dropped. May be NULL (empty chat).
  * input:   text being typed (not NUL-terminated, input_len bytes); when it
  *          is wider than the box only its tail is shown.
  * Leaves the cursor at the end of the input.
  */
-void render(const char *title, const char *name, const char **lines,
-            int line_count, const char *input, size_t input_len) {
+void render(const char *title, const chat_list_t *history, const char *input,
+            size_t input_len) {
   (void)input; // input line drawing is not implemented yet
   (void)input_len;
 
@@ -134,18 +134,9 @@ void render(const char *title, const char *name, const char **lines,
   int inner = cols - 2;     // width between the side borders
   int chat_rows = rows - 4; // minus top, separator, input, bottom
 
-  // prefix shown before every chat line: " name > "
-  char prefix[96];
-  int prefix_len = snprintf(prefix, sizeof(prefix), " %s > ", name);
-  if (prefix_len < 0) {
-    prefix_len = 0;
-  } else if (prefix_len >= (int)sizeof(prefix)) {
-    prefix_len = (int)sizeof(prefix) - 1; // name was truncated
-  }
-
-  // fill chat rows from the bottom up with the newest lines, wrapping
-  // long lines across several rows. Each line takes at least one row, so at
-  // most chat_rows prefixed lines are built (kept in `owned` until drawn).
+  // fill chat rows from the bottom up with the newest messages, wrapping
+  // long ones across several rows. Each message takes at least one row, so at
+  // most chat_rows lines are built (kept in `owned` until drawn).
   chat_row *view = calloc((size_t)chat_rows, sizeof(chat_row));
   char **owned = calloc((size_t)chat_rows, sizeof(char *));
   if (view == NULL || owned == NULL) {
@@ -156,18 +147,35 @@ void render(const char *title, const char *name, const char **lines,
   }
   int owned_count = 0;
   int fill = chat_rows;
-  for (int i = line_count - 1; i >= 0 && fill > 0; i--) {
-    size_t msg_len = strlen(lines[i]);
-    char *line = malloc((size_t)prefix_len + msg_len + 1);
+  size_t msg_count = history != NULL ? history->size : 0;
+  for (size_t i = msg_count; i > 0 && fill > 0; i--) {
+    const msg_t *msg = history->data[i - 1];
+    // fields may lack a NUL terminator: never read past the arrays
+    size_t user_len = strnlen(msg->user, sizeof(msg->user));
+    size_t msg_len = strnlen(msg->message, sizeof(msg->message));
+    while (msg_len > 0 && (msg->message[msg_len - 1] == '\n' ||
+                           msg->message[msg_len - 1] == '\r')) {
+      msg_len--;
+    }
+
+    // " user > message"
+    size_t line_len = 1 + user_len + 3 + msg_len;
+    char *line = malloc(line_len + 1);
     if (line == NULL) {
       break;
     }
-    memcpy(line, prefix, (size_t)prefix_len);
-    memcpy(line + prefix_len, lines[i], msg_len + 1);
+    char *p = line;
+    *p++ = ' ';
+    memcpy(p, msg->user, user_len);
+    p += user_len;
+    memcpy(p, " > ", 3);
+    p += 3;
+    memcpy(p, msg->message, msg_len);
+    p[msg_len] = '\0';
     owned[owned_count++] = line;
 
-    int len = prefix_len + (int)msg_len;
-    int chunks = len == 0 ? 1 : (len + inner - 1) / inner;
+    int len = (int)line_len;
+    int chunks = (len + inner - 1) / inner;
     for (int c = chunks - 1; c >= 0 && fill > 0; c--) {
       int off = c * inner;
       int n = len - off < inner ? len - off : inner;
