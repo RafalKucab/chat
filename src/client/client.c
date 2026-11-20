@@ -16,14 +16,14 @@
 #include <unistd.h>
 
 #include "../common/common.h"
-#include "../common/list.h"
+#include "../common/dyn_arr.h"
 #include "frame.h"
 
 typedef struct worker_params {
   char name[64];
   char addr[128];
   int sock;
-  chat_list_t *chat_history;
+  dyn_arr_t *chat_history;
 } worker_params_t;
 
 void usage(void) { fprintf(stderr, "usage: client [server_addr] [name]\n"); }
@@ -91,7 +91,7 @@ void *poll_worker(void *args) {
       strcpy(msg.user, worker_params.name);
       strcpy(msg.message, input);
       send(worker_params.sock, &msg, sizeof(msg_t), 0);
-      arr_push(worker_params.chat_history, &msg);
+      dyn_arr_push(worker_params.chat_history, &msg);
       render(title, worker_params.chat_history, input, strlen(input));
     }
     if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
@@ -103,7 +103,7 @@ void *poll_worker(void *args) {
       // incomming[n] = '\0';
       msg_t *msg = (msg_t *)&incomming;
 
-      arr_push(worker_params.chat_history, msg);
+      dyn_arr_push(worker_params.chat_history, msg);
       render(title, worker_params.chat_history, input, strlen(input));
     }
   }
@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
   char *addr = argv[1];
   char *name = argv[2];
 
-  chat_list_t *chat_history = arr_init(100);
+  dyn_arr_t *chat_history = dyn_arr_init(100, sizeof(msg_t));
 
   const int PORT = 8011;
 

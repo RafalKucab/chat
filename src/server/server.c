@@ -1,3 +1,4 @@
+#include <_strings.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -7,9 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include "../common/common.h"
 
 #define MAX_CLIENTS 3
 #define MAX_FDS (MAX_CLIENTS + 1) // slot 0 is the listening socket
@@ -55,13 +59,17 @@ void handle_new_conn(int sock, struct pollfd *fds, uint8_t *fds_count) {
     perror("Accept connection failed");
     return;
   }
+  connection_t connection;
+  bzero(&connection, sizeof(connection_t));
+  connection.fd = sock_client;
+  connection.port = client_addr.sin_port;
+  if (inet_ntop(AF_INET, &client_addr.sin_addr, connection.ip,
+                INET_ADDRSTRLEN) == NULL) {
+    strcpy(remote_addr, "?");
+  }
 
   // add client socket to the list of descriptors
   if (add_to_pfds(sock_client, fds, fds_count) == 0) {
-    if (inet_ntop(AF_INET, &client_addr.sin_addr, remote_addr,
-                  INET_ADDRSTRLEN) == NULL) {
-      strcpy(remote_addr, "?");
-    }
     fprintf(stdout, "Accepted incoming connection from %s:%u\n", remote_addr,
             ntohs(client_addr.sin_port));
   } else {

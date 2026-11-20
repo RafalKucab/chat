@@ -1,11 +1,11 @@
 #include <errno.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include "../common/common.h"
 #include "frame.h"
 
 #define MIN_ROWS 5 // top border + 1 chat row + separator + input + bottom
@@ -93,28 +93,7 @@ void term_size(int *rows, int *cols) {
 typedef struct {
   const char *text;
   int len;
-  const char *color; // SGR sequence for the row's text, NULL for default
 } chat_row;
-
-// foreground colors for user names: the standard and bright ANSI colors
-// (minus black/white/gray), so they follow the terminal's theme
-static const char *const USER_COLORS[] = {
-    "\x1b[31m", "\x1b[32m", "\x1b[33m", "\x1b[34m", "\x1b[35m", "\x1b[36m",
-    "\x1b[91m", "\x1b[92m", "\x1b[93m", "\x1b[94m", "\x1b[95m", "\x1b[96m",
-};
-#define USER_COLOR_COUNT (sizeof(USER_COLORS) / sizeof(USER_COLORS[0]))
-#define SGR_RESET "\x1b[0m"
-
-// pick a color from the user name (FNV-1a hash): the same name always gets
-// the same color, across messages, restarts and different clients
-static const char *user_color(const char *user, size_t len) {
-  uint32_t h = 2166136261u;
-  for (size_t i = 0; i < len; i++) {
-    h ^= (unsigned char)user[i];
-    h *= 16777619u;
-  }
-  return USER_COLORS[h % USER_COLOR_COUNT];
-}
 
 /*
  * Draw the whole chat frame, sized to the terminal.
@@ -128,14 +107,13 @@ static const char *user_color(const char *user, size_t len) {
  * title:   printable ASCII; cut to fit the top border.
  *
  * history: chat messages, oldest first; each is shown as " user > message".
- *          Each entry is colored by its user name (stable per user).
  *          Newest messages sit at the bottom and long ones wrap. Trailing
  *          '\n'/'\r' are dropped. May be NULL (empty chat).
  * input:   text being typed (not NUL-terminated, input_len bytes); when it
  *          is wider than the box only its tail is shown.
  * Leaves the cursor at the end of the input.
  */
-void render(const char *title, const chat_list_t *history, const char *input,
+void render(const char *title, const dyn_arr_t *history, const char *input,
             size_t input_len) {
   (void)input; // input line drawing is not implemented yet
   (void)input_len;
@@ -170,9 +148,9 @@ void render(const char *title, const chat_list_t *history, const char *input,
   }
   int owned_count = 0;
   int fill = chat_rows;
-  size_t msg_count = history != NULL ? history->size : 0;
+  size_t msg_count = dyn_arr_size(history);
   for (size_t i = msg_count; i > 0 && fill > 0; i--) {
-    const msg_t *msg = history->data[i - 1];
+    const msg_t *msg = dyn_arr_get(history, i - 1);
     // fields may lack a NUL terminator: never read past the arrays
     size_t user_len = strnlen(msg->user, sizeof(msg->user));
     size_t msg_len = strnlen(msg->message, sizeof(msg->message));
@@ -197,13 +175,12 @@ void render(const char *title, const chat_list_t *history, const char *input,
     p[msg_len] = '\0';
     owned[owned_count++] = line;
 
-    const char *color = user_color(msg->user, user_len);
     int len = (int)line_len;
     int chunks = (len + inner - 1) / inner;
     for (int c = chunks - 1; c >= 0 && fill > 0; c--) {
       int off = c * inner;
       int n = len - off < inner ? len - off : inner;
-      view[--fill] = (chat_row){line + off, n, color};
+      view[--fill] = (chat_row){line + off, n};
     }
   }
 
@@ -226,14 +203,7 @@ void render(const char *title, const chat_list_t *history, const char *input,
     sb_goto(&sb, 2 + r, 1);
     sb_puts(&sb, BOX_V);
     if (view[r].text != NULL) {
-      // escape sequences take no columns, so padding below is unaffected
-      if (view[r].color != NULL) {
-        sb_puts(&sb, view[r].color);
-      }
       sb_append(&sb, view[r].text, (size_t)view[r].len);
-      if (view[r].color != NULL) {
-        sb_puts(&sb, SGR_RESET);
-      }
     }
     sb_repeat(&sb, " ", inner - view[r].len);
     sb_puts(&sb, BOX_V);
