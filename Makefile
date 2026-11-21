@@ -19,7 +19,7 @@ CLIENT_SRC = $(filter-out %_test.c,$(wildcard $(SRC_DIR)/client/*.c))
 CLIENT_OBJ = $(patsubst $(SRC_DIR)/client/%.c,$(BUILD_DIR)/client/%.o,$(CLIENT_SRC))
 
 # Tests
-TEST_SRC = $(shell find $(SRC_DIR) -name '*_test.c')
+TEST_SRC = $(shell find $(SRC_DIR) -name '*_test.c') $(SRC_DIR)/tests/test_main.c
 TEST_OBJ = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/tests/%.o,$(TEST_SRC))
 
 MUNIT_SRC = vendor/munit/munit.c
@@ -62,7 +62,7 @@ $(BUILD_DIR)/client/%.o: $(SRC_DIR)/client/%.c
 
 $(BUILD_DIR)/tests/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(INCLUDES) -Ivendor/munit -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -Ivendor/munit -I$(SRC_DIR)/tests -c $< -o $@
 
 $(MUNIT_OBJ): $(MUNIT_SRC)
 	@mkdir -p $(@D)
