@@ -1,4 +1,5 @@
 #include "dlink_list.h"
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -104,19 +105,7 @@ void *dlink_list_get_from(dlink_list_t *list, size_t idx) {
   return node->value;
 }
 
-void dlink_list_delete_from(dlink_list_t *list, size_t idx) {
-  if (list == NULL) {
-    return;
-  }
-  if (idx >= list->size) {
-    return;
-  }
-
-  dlink_list_node_t *node = list->head;
-  for (size_t i = 0; i < idx; i++) {
-    node = node->next;
-  }
-
+static void unlink_node(dlink_list_t *list, dlink_list_node_t *node) {
   dlink_list_node_t *prev = node->prev;
   dlink_list_node_t *next = node->next;
 
@@ -135,4 +124,48 @@ void dlink_list_delete_from(dlink_list_t *list, size_t idx) {
   free(node->value);
   free(node);
   list->size--;
+}
+
+void dlink_list_delete_from(dlink_list_t *list, size_t idx) {
+  if (list == NULL) {
+    return;
+  }
+  if (idx >= list->size) {
+    return;
+  }
+
+  dlink_list_node_t *node = list->head;
+  for (size_t i = 0; i < idx; i++) {
+    node = node->next;
+  }
+
+  unlink_node(list, node);
+}
+
+void dlink_list_delete(dlink_list_t *list, void *value,
+                       int (*cmp)(void *, void *)) {
+  if (list == NULL || cmp == NULL) {
+    return;
+  }
+
+  for (dlink_list_node_t *node = list->head; node != NULL; node = node->next) {
+    if (cmp(node->value, value) == 0) {
+      unlink_node(list, node);
+      return;
+    }
+  }
+}
+
+void *dlink_list_search(dlink_list_t *list, void *value,
+                        int (*cmp)(void *, void *)) {
+  if (list == NULL || cmp == NULL) {
+    return NULL;
+  }
+
+  for (dlink_list_node_t *node = list->head; node != NULL; node = node->next) {
+    if (cmp(node->value, value) == 0) {
+      return node->value;
+    }
+  }
+  return NULL;
 }

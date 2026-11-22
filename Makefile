@@ -38,7 +38,7 @@ client: $(CLIENT)
 tests: $(TESTS)
 	./$(TESTS)
 
-$(SERVER): $(SERVER_OBJ) # $(COMMON_OBJ)
+$(SERVER): $(SERVER_OBJ) $(COMMON_OBJ)
 	$(CC) $^ -o $@
 
 $(CLIENT): $(CLIENT_OBJ) $(COMMON_OBJ)

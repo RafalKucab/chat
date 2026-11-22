@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,68 +15,47 @@
 #include <unistd.h>
 
 #include "../common/common.h"
+#include "../common/dlink_list.h"
 
-#define MAX_CLIENTS 3
-#define MAX_FDS (MAX_CLIENTS + 1) // slot 0 is the listening socket
 #define BUFFER_SIZE 1024
 
 void usage(void) { fprintf(stderr, "usage: server [-p|--port PORT]\n"); }
 
-int add_to_pfds(int sock_client, struct pollfd *fds, uint8_t *fds_count) {
-  for (uint8_t i = 1; i < MAX_FDS; i++) {
-    if (fds[i].fd == -1) {
-      fds[i].fd = sock_client;
-      fds[i].events = POLLIN;
-      fds[i].revents = 0;
-      (*fds_count)++;
-      return 0;
-    }
-  }
-  return 1;
+// int add_to_pfds(int sock_client, struct pollfd *fds, uint8_t *fds_count) {
+// for (uint8_t i = 1; i < MAX_FDS; i++) {
+// if (fds[i].fd == -1) {
+// fds[i].fd = sock_client;
+// fds[i].events = POLLIN;
+// fds[i].revents = 0;
+// (*fds_count)++;
+// return 0;
+// }
+// }
+// return 1;
+// }
+
+// void del_from_pfds(int sock_client, struct pollfd *fds, uint8_t *fds_count) {
+// for (uint8_t i = 1; i < MAX_FDS; i++) {
+// if (fds[i].fd == sock_client) {
+// fds[i].fd = -1;
+// fds[i].events = 0;
+// fds[i].revents = 0;
+// (*fds_count)--;
+// return;
+// }
+// }
+// fprintf(stderr, "No client socket descriptor found\n");
+// }
+
+int test_connection(void *p1, void *p2) {
+  connection_t *c1 = (connection_t *)p1;
+  connection_t *c2 = (connection_t *)p2;
+  return (c1->fd == c2->fd) ? 0 : 1;
 }
 
-void del_from_pfds(int sock_client, struct pollfd *fds, uint8_t *fds_count) {
-  for (uint8_t i = 1; i < MAX_FDS; i++) {
-    if (fds[i].fd == sock_client) {
-      fds[i].fd = -1;
-      fds[i].events = 0;
-      fds[i].revents = 0;
-      (*fds_count)--;
-      return;
-    }
-  }
-  fprintf(stderr, "No client socket descriptor found\n");
-}
-
-void handle_new_conn(int sock, struct pollfd *fds, uint8_t *fds_count) {
-  struct sockaddr_in client_addr;
-  socklen_t client_addr_len = sizeof(client_addr);
-  char remote_addr[INET_ADDRSTRLEN];
-
-  // accept new client connection
-  int sock_client =
-      accept(sock, (struct sockaddr *)&client_addr, &client_addr_len);
-  if (sock_client < 0) {
-    perror("Accept connection failed");
-    return;
-  }
-  connection_t connection;
-  bzero(&connection, sizeof(connection_t));
-  connection.fd = sock_client;
-  connection.port = client_addr.sin_port;
-  if (inet_ntop(AF_INET, &client_addr.sin_addr, connection.ip,
-                INET_ADDRSTRLEN) == NULL) {
-    strcpy(remote_addr, "?");
-  }
-
-  // add client socket to the list of descriptors
-  if (add_to_pfds(sock_client, fds, fds_count) == 0) {
-    fprintf(stdout, "Accepted incoming connection from %s:%u\n", remote_addr,
-            ntohs(client_addr.sin_port));
-  } else {
-    fprintf(stderr, "Maximum number of connections reached\n");
-    close(sock_client);
-  }
+connection_t *find_conn(dlink_list_t *conn_list, int fd) {
+  connection_t pattern = {.fd = fd};
+  return dlink_list_search(conn_list, &pattern, test_connection);
 }
 
 // send the whole buffer, retrying on partial sends
@@ -94,21 +74,58 @@ int send_all(int sock, const char *msg, size_t len) {
   return 0;
 }
 
-void broadcast(struct pollfd *fds, const char *msg, size_t len, int sock_from) {
-  for (uint8_t i = 1; i < MAX_FDS; i++) {
-    if (fds[i].fd >= 0 && fds[i].fd != sock_from) {
-      if (send_all(fds[i].fd, msg, len) < 0) {
+void broadcast(int sender_fd, const char *msg, size_t len,
+               dlink_list_t *conn_list) {
+  size_t conn_count = dlink_list_size(conn_list);
+  for (uint8_t i = 0; i < conn_count; i++) {
+    connection_t *conn = dlink_list_get_from(conn_list, i);
+    if (conn->fd != sender_fd) {
+      if (send_all(conn->fd, msg, len) < 0) {
         perror("Sending message failed");
       }
     }
   }
 }
 
-void handle_client_data(struct pollfd *fds, uint8_t idx, uint8_t *fds_count) {
-  char buffer[BUFFER_SIZE];
-  int sock_client = fds[idx].fd;
+void handle_new_conn(int sock, dlink_list_t *conn_list) {
+  struct sockaddr_in client_addr;
+  socklen_t client_addr_len = sizeof(client_addr);
+  char remote_addr[INET_ADDRSTRLEN];
 
-  ssize_t bytes_read = recv(sock_client, buffer, sizeof(buffer) - 1, 0);
+  // accept new client connection
+  int sock_client =
+      accept(sock, (struct sockaddr *)&client_addr, &client_addr_len);
+  if (sock_client < 0) {
+    perror("Accept connection failed");
+    return;
+  }
+
+  // add connection to the list
+  connection_t connection;
+  bzero(&connection, sizeof(connection_t));
+  connection.fd = sock_client;
+  connection.port = client_addr.sin_port;
+  if (inet_ntop(AF_INET, &client_addr.sin_addr, connection.ip,
+                INET_ADDRSTRLEN) == NULL) {
+    strcpy(remote_addr, "?");
+  }
+  dlink_list_insert_at_end(conn_list, &connection);
+
+  // add client socket to the list of descriptors
+  // if (add_to_pfds(sock_client, fds, fds_count) == 0) {
+  // fprintf(stdout, "Accepted incoming connection from %s:%u\n", remote_addr,
+  // ntohs(client_addr.sin_port));
+  // } else {
+  // fprintf(stderr, "Maximum number of connections reached\n");
+  // close(sock_client);
+  //}
+}
+
+void handle_client_data(dlink_list_t *conn_list, connection_t *conn) {
+  char buffer[BUFFER_SIZE];
+  // int sock_client = fds[idx].fd;
+
+  ssize_t bytes_read = recv(conn->fd, buffer, sizeof(buffer) - 1, 0);
   if (bytes_read <= 0) {
     if (bytes_read == 0) {
       // connection closed
@@ -118,27 +135,32 @@ void handle_client_data(struct pollfd *fds, uint8_t idx, uint8_t *fds_count) {
       perror("Receiving data failed");
     }
 
-    close(sock_client);
-    del_from_pfds(sock_client, fds, fds_count);
+    // delete connection
+    find_conn(conn_list, conn->fd);
+    close(conn->fd);
+    dlink_list_delete(conn_list, conn, test_connection);
     return;
   }
 
+  // print read buffer and send it to other clients
   buffer[bytes_read] = '\0';
   fprintf(stdout, "%s", buffer);
   fflush(stdout);
-  broadcast(fds, buffer, (size_t)bytes_read, sock_client);
+  broadcast(conn->fd, buffer, (size_t)bytes_read, conn_list);
 }
 
-void process_conn(int server_sock, struct pollfd *fds, uint8_t *fds_count) {
+void process_conn(int server_sock, struct pollfd *fds,
+                  dlink_list_t *conn_list) {
   // check server fd
   if (fds[0].revents & POLLIN) {
-    handle_new_conn(server_sock, fds, fds_count);
+    handle_new_conn(server_sock, conn_list);
   }
 
   // check other fds
-  for (uint8_t i = 1; i < MAX_FDS; i++) {
+  for (uint8_t i = 1; i < dlink_list_size(conn_list) + 1; i++) {
+    connection_t *conn = find_conn(conn_list, fds[i].fd);
     if (fds[i].fd >= 0 && (fds[i].revents & (POLLIN | POLLHUP | POLLERR))) {
-      handle_client_data(fds, i, fds_count);
+      handle_client_data(conn_list, conn);
     }
   }
 }
@@ -214,20 +236,21 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  struct pollfd fds_arr[MAX_FDS];
-  for (uint8_t i = 0; i < MAX_FDS; i++) {
-    fds_arr[i].fd = -1;
-    fds_arr[i].events = 0;
-    fds_arr[i].revents = 0;
-  }
-
-  fds_arr[0].fd = sock_serv;
-  fds_arr[0].events = POLLIN;
-  fds_arr[0].revents = 0;
-  uint8_t fds_count = 1; // server fd
+  dlink_list_t *conn_list = dlink_list_init(sizeof(connection_t));
 
   for (;;) {
-    int poll_count = poll(fds_arr, MAX_FDS, -1);
+    size_t conn_count = dlink_list_size(conn_list);
+    struct pollfd fds_arr[conn_count + 1];
+    fds_arr[0].fd = sock_serv;
+    fds_arr[0].events = POLLIN;
+    fds_arr[0].revents = 0;
+    for (size_t i = 0; i < conn_count; i++) {
+      connection_t *conn = dlink_list_get_from(conn_list, i);
+      fds_arr[i + 1].events = POLLIN;
+      fds_arr[i + 1].revents = 0;
+      fds_arr[i + 1].fd = conn->fd;
+    }
+    int poll_count = poll(fds_arr, conn_count + 1, -1);
     if (poll_count < 0) {
       if (errno == EINTR) {
         continue;
@@ -236,14 +259,14 @@ int main(int argc, char **argv) {
       break;
     }
 
-    process_conn(sock_serv, fds_arr, &fds_count);
+    process_conn(sock_serv, fds_arr, conn_list);
   }
 
   // close client sockets and server socket
-  for (uint8_t i = 1; i < MAX_FDS; i++) {
-    if (fds_arr[i].fd >= 0) {
-      close(fds_arr[i].fd);
-    }
+  size_t conn_count = dlink_list_size(conn_list);
+  for (size_t i = 0; i < conn_count; i++) {
+    connection_t *conn = dlink_list_get_from(conn_list, i);
+    close(conn->fd);
   }
   close(sock_serv);
 

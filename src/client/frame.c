@@ -93,7 +93,68 @@ void term_size(int *rows, int *cols) {
 typedef struct {
   const char *text;
   int len;
+  const char *color; // SGR sequence for the row's text, NULL for default
 } chat_row;
+
+// foreground colors for user names: the standard and bright ANSI colors
+// (minus black/white/gray), so they follow the terminal's theme
+static const char *const USER_COLORS[] = {
+    "\x1b[31m", "\x1b[32m", "\x1b[33m", "\x1b[34m", "\x1b[35m", "\x1b[36m",
+    "\x1b[91m", "\x1b[92m", "\x1b[93m", "\x1b[94m", "\x1b[95m", "\x1b[96m",
+};
+#define USER_COLOR_COUNT (sizeof(USER_COLORS) / sizeof(USER_COLORS[0]))
+#define SGR_RESET "\x1b[0m"
+
+// users seen so far in this chat, in order of their first message; a user's
+// color is USER_COLORS[index % USER_COLOR_COUNT], so it never changes during
+// the session and the first USER_COLOR_COUNT users all get distinct colors
+typedef struct {
+  char name[MAX_USERNAME_LEN];
+} known_user;
+
+static dyn_arr_t *known_users = NULL;
+static size_t colored_msgs = 0; // history entries already registered
+
+static size_t find_user(const char *user, size_t len) {
+  size_t count = dyn_arr_size(known_users);
+  for (size_t i = 0; i < count; i++) {
+    const known_user *u = dyn_arr_get(known_users, i);
+    if (strnlen(u->name, sizeof(u->name)) == len &&
+        memcmp(u->name, user, len) == 0) {
+      return i;
+    }
+  }
+  return count;
+}
+
+// register the authors of messages added since the last frame, oldest first,
+// so colors are handed out in the order users joined the conversation
+static void register_users(const dyn_arr_t *history) {
+  if (known_users == NULL) {
+    known_users = dyn_arr_init(16, sizeof(known_user));
+    if (known_users == NULL) {
+      return;
+    }
+  }
+  size_t msg_count = dyn_arr_size(history);
+  for (; colored_msgs < msg_count; colored_msgs++) {
+    const msg_t *msg = dyn_arr_get(history, colored_msgs);
+    size_t len = strnlen(msg->user, sizeof(msg->user));
+    if (find_user(msg->user, len) == dyn_arr_size(known_users)) {
+      known_user u = {0};
+      memcpy(u.name, msg->user, len < sizeof(u.name) ? len : sizeof(u.name) - 1);
+      dyn_arr_push(known_users, &u);
+    }
+  }
+}
+
+static const char *user_color(const char *user, size_t len) {
+  size_t idx = find_user(user, len);
+  if (idx == dyn_arr_size(known_users)) {
+    return NULL; // not registered (allocation failed): default color
+  }
+  return USER_COLORS[idx % USER_COLOR_COUNT];
+}
 
 /*
  * Draw the whole chat frame, sized to the terminal.
@@ -107,6 +168,8 @@ typedef struct {
  * title:   printable ASCII; cut to fit the top border.
  *
  * history: chat messages, oldest first; each is shown as " user > message".
+ *          Each entry is colored by its user; a user keeps the color given
+ *          on their first message for the whole session.
  *          Newest messages sit at the bottom and long ones wrap. Trailing
  *          '\n'/'\r' are dropped. May be NULL (empty chat).
  * input:   text being typed (not NUL-terminated, input_len bytes); when it
@@ -146,6 +209,8 @@ void render(const char *title, const dyn_arr_t *history, const char *input,
     free(sb.data);
     return;
   }
+  register_users(history);
+
   int owned_count = 0;
   int fill = chat_rows;
   size_t msg_count = dyn_arr_size(history);
@@ -175,12 +240,13 @@ void render(const char *title, const dyn_arr_t *history, const char *input,
     p[msg_len] = '\0';
     owned[owned_count++] = line;
 
+    const char *color = user_color(msg->user, user_len);
     int len = (int)line_len;
     int chunks = (len + inner - 1) / inner;
     for (int c = chunks - 1; c >= 0 && fill > 0; c--) {
       int off = c * inner;
       int n = len - off < inner ? len - off : inner;
-      view[--fill] = (chat_row){line + off, n};
+      view[--fill] = (chat_row){line + off, n, color};
     }
   }
 
@@ -203,7 +269,14 @@ void render(const char *title, const dyn_arr_t *history, const char *input,
     sb_goto(&sb, 2 + r, 1);
     sb_puts(&sb, BOX_V);
     if (view[r].text != NULL) {
+      // escape sequences take no columns, so padding below is unaffected
+      if (view[r].color != NULL) {
+        sb_puts(&sb, view[r].color);
+      }
       sb_append(&sb, view[r].text, (size_t)view[r].len);
+      if (view[r].color != NULL) {
+        sb_puts(&sb, SGR_RESET);
+      }
     }
     sb_repeat(&sb, " ", inner - view[r].len);
     sb_puts(&sb, BOX_V);
